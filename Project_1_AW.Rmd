@@ -1,0 +1,2203 @@
+---
+title: "CRR Projection Analysis Using Machine Learning Methods"
+author: "Allen Wang"
+output: 
+    tufte::tufte_handout: default
+---
+
+
+```{r, include=FALSE}
+library(ggplot2)
+library(tufte)
+library(dplyr)
+library(readr)
+library(tidyr)
+library(gridExtra)
+library(GGally)
+library(factoextra)
+library(randomForest)
+library(datasets)
+library(caret)
+library(caTools)
+library(factoextra)
+library(tidyverse)
+library(corrplot)
+library(ggfortify)
+library(wordcloud2)
+library(ggExtra)
+library(lubridate)
+library(aod)
+library(Amelia)
+library(pscl)
+library(ROCR)
+library("fUnitRoots")
+library(lmtest)
+library(h2o)
+library(klaR)
+library(ggridges)
+#SVM
+library(tidyverse)    # data manipulation and visualization
+library(kernlab)      # SVM methodology
+library(e1071)        # SVM methodology
+library(ISLR)         # contains example data set "Khan"
+library(RColorBrewer) # customized coloring of plots
+library(zoo)
+#XGBoost
+library(rsample)      # data splitting 
+library(gbm)          # basic implementation
+library(xgboost)      # a faster implementation of gbm
+library(caret)        # an aggregator package for performing many machine learning models
+library(h2o)          # a java-based platform
+library(pdp)          # model visualization
+library(ggplot2)      # model visualization
+library(lime)         # model visualization
+library(vtreat)
+#LSTM
+library(keras)
+library(tensorflow)
+```
+
+
+
+
+
+Packages for XGBoost machine learning model
+```{r, include=FALSE}
+library(rsample)      # data splitting 
+library(gbm)          # basic implementation
+library(xgboost)      # a faster implementation of gbm
+library(caret)        # an aggregator package for performing many machine learning models
+library(pdp)          # model visualization
+library(ggplot2)      # model visualization
+library(lime)         # model visualization
+library(devtools)
+```
+
+
+
+```{r, include=FALSE}
+test <- read.csv('/Users/awang/Desktop/CRR Analysis/test.csv')
+test2 <- read.csv('/Users/awang/Desktop/CRR Analysis/test2.csv')
+accounts <- read.csv('/Users/awang/Desktop/CRR Analysis/accounts.csv')
+apr_rev <- read.csv('/Users/awang/Desktop/CRR Analysis/apr_rev.csv')
+cohort <- read.csv('/Users/awang/Desktop/CRR Analysis/cohort.csv')
+detail <- read.csv('/Users/awang/Desktop/CRR Analysis/detail.csv')
+splits <- read.csv('/Users/awang/Desktop/CRR Analysis/splits.csv')
+nosplits <- read.csv('/Users/awang/Desktop/CRR Analysis/nosplits.csv')
+totalcrr <- read.csv('/Users/awang/Desktop/CRR Analysis/totalcrr.csv')
+compcrr <- read.csv('/Users/awang/Desktop/CRR Analysis/compcrr.csv')
+new <- read.csv('/Users/awang/Desktop/CRR Analysis/new.csv')
+```
+
+# Executive Summary
+
+```{r, echo=FALSE, message = FALSE, warning=FALSE, fig.margin = TRUE, fig.cap = "Total CRR over time: This graph shows total CRR over time; it is interesting to note the trends on the graph due to cyclical changes in consumption over time."}
+ggplot(data = totalcrr, aes(x=totalcrr$DTE, y=totalcrr$SUM.CRR, group = 1)) + xlab("Date") + ylab("Total CRR") + geom_line() + ggtitle("Total CRR Over Time")
+```
+
+```{r, echo=FALSE, message = FALSE, warning=FALSE, fig.margin = TRUE, fig.cap = "Total ingest vs total active users: This graph compares total ingest to the number of active users. The color intensity represents the burn rate bucket for each of the data points."}
+ggplot(nosplits, aes(x=ROLLING_ACTIVE_USERS_30_DAY_DAILY, y=ROLLING_TOTAL_GB_INGESTED_7_DAY_MONTHIZED, color=BURN_RATE_BUCKET_ORDER_ID)) + xlab("Rolling Active Users 30 Day Daily") + ylab("Rolling Total Gigabyte Ingest 7 Day Monthized") + labs(color = "Burn Rate Bucket") + geom_point() + ggtitle("Total Ingest vs Active Users")
+```
+
+```{r, echo=FALSE, message = FALSE, warning=FALSE, fig.margin = TRUE, fig.cap = "CRR vs burn rate: This graph compares the number of users at each CRR bucket to the burn rate, displayed as the color."}
+# include in abstract
+g <- ggplot(nosplits, aes(nosplits$CRR)) + scale_fill_brewer(palette = "Spectral")
+
+g + geom_histogram(aes(fill=nosplits$BURN_RATE_BUCKET), 
+                   col="black", 
+                   size=.1) +  labs(title="CRR vs Burn Rate") + xlab("CRR") + labs(fill = "Burn Rate Bucket")
+```
+
+
+## Introduction
+Consumption Run Rate, or CRR, is a key performance indicator (KPI) utilized to evaluate the potential revenue. The central assumption for this metric is that current conditions will continue into the future. This project seeks to refine the CRR assessment using machine learning algorithms.
+
+CRR is calculated by determining the annualized value of current point-in-time consumption across all customers. The formula is equal to the sum of the commitment dollar amount from non-consumption contracts and the value of today’s consumption for the NR1 customers, in other words, CRR = Legacy/Site1 + APoF + PAYG2. 
+* ACR (annual dollar value of contract)
+* APoF + PAYG = Data CRR (7-day ingest * GB price * days in month * 12) + User CRR (current provisioned users * user price * 12)
+
+This project will augment the go to market team’s initiatives. Prediction of seasonality and trends by industry type will provide value to GTMSO operations at both the industry level and at account level
+
+Identifying clustering among industry verticals can kickstart improvements to deal strategy operations. Analysis of clusters and their parameters can be utilized to clarify client needs and priorities on the deal side.
+
+## Objectives
+
+* Develop a machine learning model to better predict consumption run rate
+* Generate descriptive graphics to exemplify initial conclusions
+* Create a dashboard to present findings for cross-team functionality
+
+## Timing and Core Audience
+FY22 Q2 for DSM Team, Greater Sales Team, Finance Team
+
+## Key Elements
+* CRR prediction dashboard should be repeatable and scalable
+* Increased historical data will increase forecast accuracy
+* Stratification based on industry verticals
+
+## Approach
+
+## Assumptions
+* Excel is an effective starting point to test hypotheses
+* Historical ingest is a good predictor of future consumption
+* Industries with similar consumption patterns have similar attributes and priorities
+* Focus on running hot because running cold not relevant since rollover - target of 75% consumption to approximate "running hot"
+
+
+
+## Methods
+* Utilize EDW looker for average ingest over 7 days and current provisioned users
+* Target: 70% and 80% total consumption to determine running hot
+* Variable 70_csmp, 80_csmp
+* Run various machine learning models on data - classification for clustering of industry verticals, regression to predict CRR
+* K-means clustering
+* Random forest
+* Regression
+* Prevent overfitting of data to ingest spikes to improve forecast accuracy
+* Present findings in dashboard to create predictions based on company type stratification
+* Predict TDP CRR vs mixing in specific user
+
+## Team
+* Sufia Siddiqui - Manager
+* Allen Wang - Monetization Intern
+
+
+
+
+
+
+
+
+# April Revenue Dataset
+
+```{r, echo=FALSE, include = FALSE}
+head(apr_rev)
+```
+
+```{r, echo=FALSE, include = FALSE}
+summary(apr_rev)
+```
+
+```{r, echo=FALSE, message = FALSE, warning=FALSE}
+ggplot(apr_rev, aes(REVENUE_INCREASE_FROM_CORE, x=ACTUAL_FULL_USERS)) + geom_point() + scale_x_continuous(limits = c(0, 100)) + scale_y_continuous(limits = c(0, 100))
+```
+<p>&nbsp;</p>
+Comparing number of users to the revenue increase seems to show a low amount of correlation between user and revenue increases.
+<p>&nbsp;</p>
+
+```{r, echo=FALSE, message = FALSE, warning=FALSE}
+ggplot(apr_rev, aes(x=apr_rev$MONTHLY_USER_REVENUE_ESTIMATE_IF_NOT_ON_CORE, y=apr_rev$ACTUAL_USER_REVENUE_PQ, color=apr_rev$BUYING_PROGRAM)) + xlab("Monthly User Revenue Estimate") + ylab("Actual User Revenue") + labs(color = "Buying Program") + geom_point()  + scale_x_continuous(limits = c(0, 1167.7)) + scale_y_continuous(limits = c(0, 1366)) + ggtitle("Actual vs. Predicted User Revenue, Apr 2022")
+```
+<p>&nbsp;</p>
+Comparing the predicted versus actual user revenue shows that the estimates seem to be relatively conservative since the actual revenue is always above the predicted amount. This means that predictions can be more aggressive to increase accuracy.
+<p>&nbsp;</p>
+
+
+```{r, echo=FALSE, message = FALSE, warning=FALSE}
+ggplot(apr_rev, aes(x=apr_rev$ACTUAL_USER_REVENUE_PQ, y=apr_rev$ACTUAL_USER_REVENUE_PQ-apr_rev$MONTHLY_USER_REVENUE_ESTIMATE_IF_NOT_ON_CORE, color=apr_rev$BUYING_PROGRAM)) + xlab("Monthly User Revenue Estimate") + ylab("Revenue Prediction Residual") + labs(color = "Buying Program") + geom_point()  + scale_x_continuous(limits = c(0, 1167.7)) + scale_y_continuous(limits = c(0, 1366)) + ggtitle("Revenue Prediction Residuals vs Monthly User Revenue Estimate Apr 2022")
+```
+<p>&nbsp;</p>
+Graphing the residuals from the predicted versus actual values shows that annual pool of funds customers seem to have a more accurate prediction of usage compared to pay-as-you-go customers. This makes sense, as PAYG customers have more unpredictable data ingest.
+<p>&nbsp;</p>
+
+```{r, echo=FALSE, include = FALSE}
+head(test)
+```
+
+```{r, echo=FALSE, include = FALSE}
+summary(test)
+```
+
+
+```{r, echo=FALSE, message = FALSE, warning=FALSE}
+ggplot(test, aes(y=test$FULL_PLATFORM_USER_UNIT_PRICE, x=test$BOP_RENEWAL_DATE)) + geom_point()
+```
+
+<p>&nbsp;</p>
+
+
+<p>&nbsp;</p>
+
+```{r, echo=FALSE, message = FALSE, warning=FALSE}
+ggplot(test, aes(x=test$BUYING_PROGRAM)) + geom_bar() + xlab("Buying Program")
+```
+
+<p>&nbsp;</p>
+
+
+<p>&nbsp;</p>
+
+```{r, echo=FALSE, message = FALSE, warning=FALSE}
+ggplot(test, aes(x=test$DTE, y=test$BOP_ARR, color=test$BUYING_PROGRAM)) + xlab("Date") + ylab("ARR") + labs(color = "Buying Program") + geom_point()
+```
+
+<p>&nbsp;</p>
+
+
+<p>&nbsp;</p>
+
+# Accounts Dataset
+```{r, echo=FALSE, include = FALSE}
+head(accounts)
+```
+
+```{r, echo=FALSE, include = FALSE}
+summary(accounts)
+```
+
+
+
+```{r, echo = FALSE}
+accounts_numeric <- accounts %>% select_if(is.numeric)
+accounts_nc <- accounts_numeric
+accounts_nc <- accounts_nc[, colSums(is.na(accounts_nc)) == 0]
+```
+
+```{r, include = FALSE}
+summary(accounts_nc)
+```
+
+```{r, echo = FALSE}
+set.seed(1)
+in.train = sample(nrow(accounts_nc), size = round(nrow(accounts_nc) * .8))
+accounts_train = accounts_nc[in.train, ]
+accounts_test = accounts_nc[-in.train, ]
+```
+
+```{r, echo = FALSE}
+accounts.rf <- randomForest(accounts_test)
+```
+
+```{r, echo = FALSE, include = FALSE}
+accounts.rf
+```
+
+```{r, echo = FALSE, fig.height=8, fig.width=8}
+importance(accounts.rf)
+```
+
+```{r, echo = FALSE}
+rfImportance <- importance(accounts.rf)
+```
+
+
+```{r, echo = FALSE}
+varImpPlot(accounts.rf, main="Feature Importance")
+```
+
+```{r, echo = FALSE}
+head(rfImportance)
+```
+
+
+\newpage
+
+
+```{r, echo = FALSE}
+accounts_c <- accounts_nc
+accounts_c <- subset(accounts_c, select = )
+```
+
+
+```{r, include = FALSE}
+head(accounts_nc)
+```
+
+```{r, fig.height=16, fig.width=16, echo = FALSE, warning = FALSE, message = FALSE}
+AC = cor(accounts_nc)
+corrplot(AC, method = 'number')
+```
+
+
+
+```{r, echo=FALSE, message = FALSE, warning=FALSE}
+ggplot(accounts, aes(x=accounts$family_arr, y=accounts$open_oppty_value, color=accounts$buying_program)) + xlab("Family Annual Recurring Revenue") + ylab("Open Opportunity Value") + labs(color = "Buying Program") + geom_point() + ggtitle("Open Opportunity Value vs. Family Annual Recurring Revenue") + scale_x_continuous(trans='log10') + scale_y_continuous(trans='log10')
+```
+
+<p>&nbsp;</p>
+
+
+<p>&nbsp;</p>
+
+```{r, echo=FALSE, message = FALSE, warning=FALSE}
+ggplot(accounts, aes(x=accounts$last_month_estimated_cost, y=accounts$apm_host_usage_free, color=accounts$buying_program)) + xlab("Last Month Estimated Cost") + ylab("APM Host Usage") + labs(color = "Buying Program") + geom_point() + ggtitle("APM Host Usage vs Last Month Estimated Cost") + scale_x_continuous(trans='log10') + scale_y_continuous(trans='log10')
+```
+
+<p>&nbsp;</p>
+
+
+<p>&nbsp;</p>
+
+# CRR Dataset
+```{r, include = FALSE}
+head(test2)
+```
+
+```{r, include = FALSE}
+summary(test2)
+```
+
+```{r, echo = FALSE}
+test2_numeric <- test2 %>% select_if(is.numeric)
+test2_nc <- subset(test2_numeric, select = -c(BILLABLE_RPM_ACCOUNT_ID, DATA_CENTER_ID))
+```
+
+```{r, include = FALSE}
+head(test2_nc)
+```
+
+
+
+```{r, include = FALSE}
+# Cohort Split Dataset
+head(cohort)
+```
+
+```{r, include = FALSE}
+summary(cohort)
+```
+
+
+
+```{r, include = FALSE}
+# Detailed CRR Dataset
+head(detail)
+```
+
+```{r, include = FALSE}
+summary(detail)
+```
+
+
+# Split Accounts Dataset
+```{r, include = FALSE}
+head(splits)
+```
+
+```{r, include = FALSE}
+summary(splits)
+```
+
+
+```{r, echo = FALSE}
+splits_numeric <- select_if(splits, is.numeric)
+splits_nc <- splits_numeric
+splits_nc <- splits_nc %>%
+  mutate_all(funs(ifelse(is.na(.), 0, .)))
+```
+
+```{r, include = FALSE}
+head(splits_nc)
+```
+
+```{r, include = FALSE}
+summary(splits_nc)
+```
+
+\newpage
+
+## Principal Component Analysis
+
+Remove constant/zero columns from cleaned dataset
+```{r, include = FALSE}
+splits_nc <- splits_nc[ , which(apply(splits_nc, 2, var) != 0)]
+```
+
+```{r, message = FALSE, echo = FALSE, warning = FALSE}
+pc1<-prcomp(splits_nc, center=TRUE, scale.=TRUE)
+```
+
+<p>&nbsp;</p>
+
+
+<p>&nbsp;</p>
+
+```{r, message = FALSE, warning = FALSE, echo = FALSE}
+pca_res <- prcomp(splits_nc, scale. = TRUE)
+autoplot(pca_res, data = splits_nc, loadings.label.repel=T, loadings = TRUE, loadings.label=TRUE, title = "Split Accounts Principal Component Analysis")
+```
+
+<p>&nbsp;</p>
+
+
+<p>&nbsp;</p>
+
+```{r, echo = FALSE}
+screeplot(pc1,type="lines", main="Split Accounts Scree Plot")
+```
+
+<p>&nbsp;</p>
+
+
+<p>&nbsp;</p>
+
+## Correlation Analysis
+```{r, message = FALSE, warning = FALSE, fig.height=16, fig.width=16, echo = FALSE}
+M = cor(splits_nc, use="pairwise.complete.obs")
+corrplot(M, method = 'color', order = 'alphabet')
+```
+
+## K Means Analysis
+```{r, include = FALSE}
+splits_k <- kmeans(pc1$x, 2, iter.max = 10, nstart = 1)
+```
+
+
+```{r, include=FALSE}
+splits_k
+```
+
+
+```{r, echo=FALSE, cache = FALSE}
+fviz_nbclust(pc1$x, kmeans, method = "silhouette")
+```
+
+K-means cluster graph
+```{r, echo=FALSE}
+set.seed(1)
+autoplot(splits_k, data = pc1$x, main = "Split Accounts K-Means Clusters")
+```
+
+Cluster plot
+
+```{r, echo=FALSE, fig.height=8, fig.width=8}
+fviz_cluster(splits_k, data = splits_nc)
+```
+
+
+## Unsupervised Random Forest on Split Accounts
+```{r, echo = FALSE}
+set.seed(1)
+in.train = sample(nrow(splits_nc), size = round(nrow(splits_nc) * .8))
+splits_train = splits_nc[in.train, ]
+splits_test = splits_nc[-in.train, ]
+```
+
+```{r, echo = FALSE}
+splits.rf <- randomForest(splits_test)
+```
+
+```{r, echo = FALSE, include = FALSE}
+splits.rf
+```
+
+```{r, echo = FALSE, include = FALSE}
+importance(splits.rf)
+```
+
+```{r, echo = FALSE, include = FALSE}
+rfImportance <- importance(splits.rf)
+```
+
+
+```{r, fig.height=6, fig.width=10, echo = FALSE}
+varImpPlot(splits.rf, main="Split Accounts Feature Importance")
+```
+
+```{r}
+head(rfImportance)
+```
+
+
+
+\newpage
+
+# No Splits Data
+
+```{r, include = FALSE}
+head(nosplits)
+```
+
+```{r, include = FALSE}
+summary(nosplits)
+```
+
+
+## Choose numeric data
+```{r, echo = FALSE}
+nosplits_numeric <- nosplits %>% select_if(is.numeric)
+nosplits_nc <- nosplits_numeric
+nosplits_nc <- nosplits_nc %>%
+  mutate_all(funs(ifelse(is.na(.), 0, .)))
+```
+
+```{r, echo=FALSE, include = FALSE}
+summary(nosplits_nc)
+```
+
+```{r, echo = FALSE}
+pc1<-prcomp(nosplits_nc, center=TRUE, scale.=TRUE)
+```
+
+```{r, echo = FALSE, warning = FALSE, message = FALSE}
+pca_res <- prcomp(nosplits_nc, scale. = TRUE)
+autoplot(pca_res, data = nosplits_nc, loadings.label.repel=T, loadings = TRUE, loadings.label=TRUE, title = "Consolidated Accounts Principal Component Analysis")
+```
+
+```{r, echo = FALSE}
+screeplot(pc1,type="lines", main="Consolidated Accounts Scree Plot")
+```
+
+```{r, fig.height = 12, fig.width = 12, echo = FALSE}
+missmap(nosplits, main = "Missing values vs observed")
+```
+
+\newpage
+
+## Correlation Analysis
+```{r, message = FALSE, warning = FALSE, fig.height=16, fig.width=16, echo = FALSE}
+M = cor(nosplits_nc, use="pairwise.complete.obs")
+corrplot(M, method = 'color', order = 'alphabet')
+```
+
+\newpage
+
+## K Means Analysis
+```{r, include = FALSE}
+nosplits_k <- kmeans(pc1$x, 3, iter.max = 10, nstart = 1)
+```
+
+
+```{r, include=FALSE}
+nosplits_k
+```
+
+Optimum number of clusters analysis
+```{r, echo=FALSE, cache = FALSE}
+fviz_nbclust(pc1$x, kmeans, method = "silhouette")
+```
+
+## K-means cluster graph
+```{r, echo=FALSE}
+set.seed(1)
+autoplot(nosplits_k, data = pc1$x, main = "Consolidated Accounts K-Means Clusters")
+```
+
+## Cluster plot
+```{r, echo=FALSE, fig.height=8, fig.width=8}
+fviz_cluster(nosplits_k, data = nosplits_nc)
+```
+
+
+
+```{r}
+results <- prcomp(nosplits_nc, scale = TRUE)
+```
+
+```{r}
+results$rotation <- -1*results$rotation
+```
+
+```{r}
+results$rotation
+```
+
+```{r}
+biplot(results, scale = 0)
+```
+
+
+```{r}
+results$sdev^2 / sum(results$sdev^2)
+```
+
+
+
+
+
+# Exploratory Data Analysis for No Splits Data 
+
+```{r, echo=FALSE, message = FALSE, warning=FALSE}
+g <- ggplot(nosplits, aes(BURN_RATE_BUCKET, CRR))
+g + geom_boxplot(varwidth=T, fill="plum") + 
+    labs(title="Burn Rate vs CRR", 
+         x="Burn Rate Bucket",
+         y="CRR")
+```
+
+
+```{r, echo=FALSE, message = FALSE, warning=FALSE}
+ggplot(test, aes(x=test$DTE, y=test$BOP_ARR, color=test$BUYING_PROGRAM)) + xlab("Date") + ylab("ARR") + labs(color = "Buying Program") + geom_point()
+```
+
+
+```{r, echo=FALSE, message = FALSE, warning=FALSE}
+ggplot(nosplits, aes(x=APOF_ANNUAL_POOL,
+                     y=CRR,
+                     color=BURN_RATE_BUCKET)) + xlab("APOF") + ylab("CRR") + labs(color = "Buying Program") + geom_point() + ggtitle("CRR vs APOF")
+```
+
+```{r, echo=FALSE, message = FALSE, warning=FALSE}
+ggplot(nosplits, aes(x=TOTAL_GB_INGESTED,
+                     y=CRR,
+                     color=BURN_RATE_BUCKET)) + xlab("Ingest") + ylab("CRR") + labs(color = "Buying Program") + geom_point() + ggtitle("CRR vs Ingest") + scale_x_continuous(limits = c(0, 20000))
+```
+
+```{r, echo=FALSE, message = FALSE, warning=FALSE}
+ggplot(nosplits, aes(x=ACR_ADJUSTED,
+                     y=CRR,
+                     color=BURN_RATE_BUCKET)) + xlab("ACR") + ylab("CRR") + labs(color = "Buying Program") + geom_point() + ggtitle("CRR vs ACR")
+```
+
+```{r, echo=FALSE, message = FALSE, warning=FALSE}
+ggplot(nosplits, aes(x = CRR, y = BURN_RATE_BUCKET)) +
+  geom_density_ridges() +
+  theme_ridges() + 
+  theme(legend.position = "none") +
+  ylab("Burn Rate Bucket")
+```
+
+```{r, echo=FALSE, message = FALSE, warning=FALSE}
+ggplot(nosplits, aes(x=ACR_ADJUSTED, y=CRR) ) +
+  geom_density_2d()
+```
+
+```{r, echo=FALSE, message = FALSE, warning=FALSE}
+ggplot(nosplits, aes(x=TOTAL_GB_INGESTED, y=CRR) ) +
+  geom_density_2d()
+```
+
+```{r, echo=FALSE, message = FALSE, warning=FALSE}
+ggplot(nosplits, aes(x=APOF_ANNUAL_POOL, y=CRR) ) +
+  geom_density_2d()
+```
+
+
+```{r, echo=FALSE, message = FALSE, warning=FALSE}
+ggplot(apr_rev, aes(x=apr_rev$ACTUAL_USER_REVENUE_PQ, y=apr_rev$ACTUAL_USER_REVENUE_PQ-apr_rev$MONTHLY_USER_REVENUE_ESTIMATE_IF_NOT_ON_CORE, color=apr_rev$BUYING_PROGRAM)) + xlab("Monthly User Revenue Estimate") + ylab("Revenue Prediction Residual") + labs(color = "Buying Program") + geom_point()  + scale_x_continuous(limits = c(0, 1167.7)) + scale_y_continuous(limits = c(0, 1366)) + ggtitle("Revenue Prediction Residuals vs Monthly User Revenue Estimate Apr 2022")
+```
+
+
+
+
+
+# Random Forest (Unsupervised)
+```{r, echo = FALSE}
+set.seed(1)
+in.train = sample(nrow(nosplits_nc), size = round(nrow(nosplits_nc) * .8))
+nosplits_train = nosplits_nc[in.train, ]
+nosplits_test = nosplits_nc[-in.train, ]
+```
+
+```{r, echo = FALSE}
+nosplits.rf <- randomForest(nosplits_test)
+```
+
+```{r, echo = FALSE, include = FALSE}
+nosplits.rf
+```
+
+```{r, include = FALSE, echo = FALSE}
+importance(nosplits.rf)
+```
+
+```{r, echo = FALSE}
+rfImportance <- importance(nosplits.rf)
+```
+
+
+```{r, fig.height=6, fig.width=10, echo = FALSE}
+varImpPlot(nosplits.rf, main="Consolidated Accounts Feature Importance")
+```
+
+```{r, echo = FALSE}
+head(rfImportance)
+```
+
+
+
+\newpage
+
+# Total CRR Dataset
+```{r, include = FALSE}
+head(totalcrr)
+```
+
+```{r, echo = FALSE}
+totalcrr$DTE <- as.Date(totalcrr$DTE)
+```
+
+
+```{r, include = FALSE}
+summary(totalcrr)
+```
+
+
+
+
+
+```{r, echo=FALSE, message = FALSE, warning=FALSE}
+ggplot(data = totalcrr, aes(x=totalcrr$DTE, y=totalcrr$SUM.CRR, group = 1)) + xlab("Date") + ylab("Total CRR") + geom_line() + ggtitle("Total CRR Over Time") + coord_trans(y="log10")
+```
+
+
+\newpage
+
+# Linear Regression (CRR)
+
+```{r, echo = FALSE}
+# Reload dataset
+totalcrr <- read.csv('/Users/awang/Desktop/CRR Analysis/totalcrr.csv')
+```
+
+```{r, echo=FALSE, include = FALSE}
+head(totalcrr$DTE)
+```
+
+```{r, echo=FALSE, include = FALSE}
+summary(totalcrr)
+```
+
+```{r, echo = FALSE}
+# Convert time string to time format
+totalcrr$DAYS <- as.Date(totalcrr$DTE)
+```
+
+
+```{r, echo = FALSE}
+totalcrr$DAYS.SINCE <- totalcrr$DAYS - totalcrr$DAYS[1]
+```
+
+
+```{r, echo=FALSE, include = FALSE}
+summary(totalcrr)
+```
+
+
+```{r, echo = FALSE}
+totalcrr$DAYS.SINCE <- as.numeric(totalcrr$DAYS.SINCE)
+```
+
+```{r, echo=FALSE, include = FALSE}
+summary(totalcrr)
+```
+
+
+```{r, echo = FALSE}
+lmCRR <- lm(totalcrr$SUM.CRR~totalcrr$DAYS.SINCE, data = totalcrr)
+```
+
+```{r}
+lmCRR
+```
+
+```{r, echo = FALSE}
+summary(lmCRR)
+```
+
+It seems that from the linear regression plot that there is a high correlation between the expected and output.
+
+```{r, echo = FALSE}
+plot(totalcrr$DAYS.SINCE,totalcrr$SUM.CRR.,
+     main='Regression for Days Since Feb 2021 and Total CRR',
+     xlab='Days Since Feb 2021',ylab='Total CRR')
+  
+# plot a regression line
+abline(lm(SUM.CRR.~DAYS.SINCE,data=totalcrr),col='red')
+```
+
+
+```{r, echo = FALSE}
+res <- resid(lmCRR)
+```
+
+```{r, echo = FALSE}
+plot(fitted(lmCRR), res)
+abline(0,0)
+```
+
+```{r}
+#create Q-Q plot for residuals
+qqnorm(res)
+
+#add a straight diagonal line to the plot
+qqline(res)
+```
+
+```{r}
+plot(density(res))
+```
+
+
+
+
+# Reload data
+```{r}
+nosplits <- read.csv('/Users/awang/Desktop/CRR Analysis/nosplits.csv')
+```
+
+
+# Logistic Regression (Consolidated)
+```{r}
+logCRR <- glm(nosplits_nc)
+```
+
+```{r, include = FALSE}
+summary(logCRR)
+```
+
+Choose numeric data
+```{r, echo=FALSE, include = FALSE}
+head(nosplits_numeric)
+```
+
+Choose non-numeric data
+```{r, include=FALSE}
+nosplits_nonnum <- nosplits %>% select_if(negate(is.numeric))
+```
+
+```{r, echo=FALSE, include = FALSE}
+head(nosplits_nonnum)
+```
+
+Remove frames with all NA's
+```{r, echo=FALSE, include = FALSE}
+summary(nosplits_nonnum)
+```
+
+```{r, include=FALSE}
+nosplits_nonnum <- subset(nosplits_nonnum, select = -c(IS_NR1_CORE_SUBSCRIPTION,SITE_LICENSE_TYPE))
+```
+
+
+
+Missing Value Handling
+
+Check for missing values again
+
+```{r}
+# Missing values for numeric
+missmap(nosplits_numeric, main = "Missing values vs observed")
+```
+
+```{r}
+# Missing values for non-numeric
+missmap(nosplits_nonnum, main = "Missing values vs observed")
+```
+
+
+
+```{r, echo=FALSE, include = FALSE}
+head(nosplits_nonnum)
+```
+
+
+```{r}
+# Missing values for non-numeric
+missmap(nosplits_nonnum, main = "Missing values vs observed")
+```
+## Requantify burn rate buckets
+```{r}
+nosplits_nonnum[nosplits_nonnum == "Cold"] <- 0.2
+nosplits_nonnum[nosplits_nonnum == "Cool"] <- 0.4
+nosplits_nonnum[nosplits_nonnum == "Neutral"] <- 0.6
+nosplits_nonnum[nosplits_nonnum == "Warm"] <- 0.8
+nosplits_nonnum[nosplits_nonnum == "Hot"] <- 1
+```
+
+```{r}
+nosplits_nonnum[nosplits_nonnum == "Multiple Buying Programs"] <- 0.5
+nosplits_nonnum[nosplits_nonnum == "Not Applicable"] <- 0
+```
+
+
+```{r}
+nosplits_nonnum$CONSO_BURN_RATE_BUCKET <- as.factor(nosplits_nonnum$CONSO_BURN_RATE_BUCKET)
+```
+
+
+```{r, echo=FALSE, include = FALSE}
+summary(nosplits_nonnum)
+```
+
+
+
+## Choose variables to use in logistic regression
+```{r}
+nosplits_log <- subset(nosplits_nonnum, select = c(BUYING_PROGRAM, FSO_TYPE, CRR_BAND, RENEWAL_QTR, CONSO_CRR_BAND, CONSO_BUYING_PROGRAM, CA_COVERAGE_FLAG_CURRENT, SALES_REGION, SALES_GEO_CURRENT, CONSO_BURN_RATE_BUCKET, BURN_RATE_BUCKET))
+```
+
+```{r}
+nosplits_log <- as.data.frame(unclass(nosplits_log),stringsAsFactors=TRUE)
+```
+
+
+```{r, echo=FALSE, include = FALSE}
+summary(nosplits_log)
+```
+
+## Create testing and training sets
+```{r,echo=FALSE}
+set.seed(1)
+in.train = sample(nrow(nosplits_log), size = round(nrow(nosplits_log) * .8))
+nosplits_logtrain = nosplits_log[in.train, ]
+nosplits_logtest = nosplits_log[-in.train, ]
+```
+
+
+
+
+Burn Rate Bucket Prediction
+```{r}
+nsLog_br <- glm(nosplits_logtrain$CONSO_BURN_RATE_BUCKET ~.,family=binomial(link='logit'),data=nosplits_logtrain)
+```
+
+```{r}
+summary(nsLog_br)
+```
+
+```{r}
+anova(nsLog_br, test="Chisq")
+```
+
+
+
+```{r}
+pR2(nsLog_br)
+```
+
+
+
+
+
+
+# ARIMA Model
+
+## New Analysis
+```{r}
+compcrr_arima <- subset(compcrr, select = -c(CRR, RPM_ACCOUNT_ID))
+```
+
+```{r}
+tcarima <- subset(totalcrr, select = c(SUM.CRR.))
+```
+
+```{r}
+ccarima = ts(compcrr_arima, start = c(0), frequency = 365)
+```
+
+
+```{r, echo=FALSE, include = FALSE}
+head(ccarima )
+```
+
+## Autoplot
+```{r, fig.height = 8}
+autoplot(ts(ccarima))
+```
+
+```{r}
+totalcrr_arimats <- ts(ccarima, frequency=365)
+```
+
+
+
+## Old Analysis
+```{r, echo=FALSE, include = FALSE}
+summary(totalcrr)
+```
+
+
+## Select columns from totalcrr
+```{r}
+totalcrr_arima <- subset(totalcrr, select = c(SUM.CRR., DTE))
+```
+
+```{r}
+tcarima <- subset(totalcrr, select = c(SUM.CRR.))
+```
+
+```{r}
+tcarima = ts(tcarima, start = c(0), frequency = 365)
+```
+
+
+```{r, echo=FALSE, include = FALSE}
+head(totalcrr_arima)
+```
+
+```{r, echo=FALSE, include = FALSE}
+summary(totalcrr_arima)
+```
+
+## Autoplot
+
+```{r}
+totalcrr_arimats <- ts(totalcrr_arima, frequency=365)
+```
+
+
+```{r, fig.height = 4, fig.width = 8}
+components.totalcrr_arimats = decompose(totalcrr_arimats)
+plot(components.totalcrr_arimats)
+```
+
+
+## Unit Root Test
+```{r, fig.width = 5, fig.height = 5}
+urkpssTest(totalcrr_arimats, type = c("tau"), lags = c("short"),use.lag = NULL, doplot = TRUE)
+tsstationary = diff(totalcrr_arimats, differences=1)
+plot(tsstationary)
+```
+## Autocorrelation
+
+```{r}
+#acf(totalcrr_arimats,lag.max=34) 
+```
+
+```{r}
+timeseriesseasonallyadjusted <- totalcrr_arimats- components.totalcrr_arimats$seasonal
+tsstationary <- diff(timeseriesseasonallyadjusted, differences=1)
+```
+
+```{r}
+#acf(tsstationary, lag.max=34)
+#pacf(tsstationary, lag.max=34)
+```
+
+
+
+```{r}
+# reg <- fourier(tcarima, K=c(i,n,j))
+```
+
+
+```{r}
+#auto.arima(tcarima, xreg= as.matrix(reg), seasonal= F)
+```
+
+
+```{r}
+#fitARIMA <- arima(tcarima, order=c(1,1,1),seasonal = list(order = c(1, 1, 1), period = 365),method="ML")
+#coeftest(fitARIMA) 
+```
+
+```{r}
+#confint(fitARIMA)
+```
+
+
+```{r}
+library(rsample)  # data splitting 
+library(dplyr)    # data transformation
+library(ggplot2)  # data visualization
+library(caret)    # implementing with caret
+```
+
+
+
+# Naive Bayes Algorithm
+
+
+## Create training and testing sets
+
+
+```{r}
+nosplits_nbtrain <- nosplits_logtrain
+nosplits_nbtest <- nosplits_logtest
+```
+
+```{r}
+table(nosplits_nbtrain$BURN_RATE_BUCKET) %>% prop.table()
+```
+
+
+```{r}
+table(nosplits_nbtest$BURN_RATE_BUCKET) %>% prop.table()
+```
+
+```{r, include = FALSE}
+summary(nosplits_nbtrain)
+```
+
+
+## Conditional independence
+```{r, echo=FALSE, message = FALSE, warning=FALSE}
+nosplits_nbtrain %>% 
+  gather(metric, value) %>% 
+  ggplot(aes(value, fill = metric)) + 
+  geom_density(show.legend = FALSE) + 
+  facet_wrap(~ metric, scales = "free")
+```
+
+
+## Modeling
+```{r}
+features <- setdiff(names(nosplits_nbtrain), "Burn Rate Bucket")
+x <- nosplits_nbtrain[, features]
+y <- nosplits_nbtrain$BURN_RATE_BUCKET
+```
+
+```{r}
+train_control <- trainControl(
+  method = "cv", 
+  number = 10
+  )
+```
+
+
+
+
+```{r, warning = FALSE, message = FALSE}
+nb.m1 <- caret::train(
+  x = x,
+  y = y,
+  method = "nb",
+  trControl = train_control
+  )
+```
+
+
+```{r}
+confusionMatrix(nb.m1)
+```
+
+```{r, warning = FALSE, message = FALSE}
+search_grid <- expand.grid(
+  usekernel = c(TRUE, FALSE),
+  fL = 0:5,
+  adjust = seq(0, 5, by = 1)
+)
+
+# train model
+nb.m2 <- caret::train(
+  x = x,
+  y = y,
+  method = "nb",
+  trControl = train_control,
+  tuneGrid = search_grid,
+  preProc = c("BoxCox", "center", "scale", "pca")
+  )
+```
+
+```{r}
+nb.m2$results %>% 
+  top_n(5, wt = Accuracy) %>%
+  arrange(desc(Accuracy))
+##   usekernel fL adjust  Accuracy     Kappa AccuracySD   KappaSD
+## 1      TRUE  1      3 0.8737864 0.4435322 0.02858175 0.1262286
+## 2      TRUE  0      2 0.8689320 0.4386202 0.02903618 0.1155707
+## 3      TRUE  2      3 0.8689320 0.4750282 0.02830559 0.0970368
+## 4      TRUE  2      4 0.8689320 0.4008608 0.02432572 0.1234943
+## 5      TRUE  4      5 0.8689320 0.4439767 0.02867321 0.1354681
+
+# plot search grid results
+plot(nb.m2)
+```
+```{r, message = FALSE, warning = FALSE}
+pred <- predict(nb.m2, newdata = nosplits_nbtest)
+confusionMatrix(pred, nosplits_nbtest$BURN_RATE_BUCKET)
+```
+
+
+```{r}
+h2o.no_progress()
+h2o.init()
+```
+
+
+
+
+# Support Vector Machines
+
+## Generate pseudorandom numbers
+```{r}
+set.seed(10)
+```
+
+
+```{r, include = FALSE}
+summary(nosplits_numeric)
+```
+
+## Data Preprocessing
+```{r}
+nosplits_svm <- nosplits_numeric
+```
+
+Replace NA with mean
+```{r}
+nosplits_svm <- na.aggregate(nosplits_svm)
+```
+
+
+```{r, include = FALSE}
+summary(nosplits_svm)
+```
+
+
+
+```{r}
+nosplits_svmtest <- dplyr::select(nosplits_svm, c(APOF_ANNUAL_POOL, 
+                                     TOTAL_GB_INGESTED,
+                                     TOTAL_FULL_USERS_PROVISIONED,
+                                     ROLLING_TOTAL_GB_INGESTED_7_DAY_MONTHIZED,
+                                     ROLLING_ACTIVE_USERS_30_DAY_DAILY,
+                                     CRR,
+                                     BURN_RATE,
+                                     BURN_RATE_BUCKET_ORDER_ID))
+```
+
+
+```{r}
+nosplits_svmsmall <- dplyr::select(nosplits_svm, c(
+                                     ROLLING_ACTIVE_USERS_30_DAY_DAILY,
+                                     ROLLING_TOTAL_GB_INGESTED_7_DAY_MONTHIZED
+                                     ))
+```
+
+## Fit SVM to dataset
+```{r}
+svmfit <- svm(ROLLING_TOTAL_GB_INGESTED_7_DAY_MONTHIZED~., data = nosplits_svmsmall, kernel = "linear", scale = FALSE)
+```
+
+```{r, include = FALSE}
+summary(svmfit)
+```
+
+
+```{r}
+plot(svmfit, nosplits_svmsmall, ROLLING_ACTIVE_USERS_30_DAY_DAILY~ROLLING_TOTAL_GB_INGESTED_7_DAY_MONTHIZED)
+```
+
+## Plot SVM
+```{r}
+plot(svmfit, data=nosplits_svm)
+```
+
+```{r}
+nosplits_svmsmall$ROLLING_TOTAL_GB_INGESTED_7_DAY_MONTHIZED <- as.factor(nosplits_svmsmall$ROLLING_TOTAL_GB_INGESTED_7_DAY_MONTHIZED)
+```
+
+
+```{r}
+#kernfit <- ksvm(nosplits_svmsmall$ROLLING_ACTIVE_USERS_30_DAY_DAILY, #nosplits_svmsmall$ROLLING_TOTAL_GB_INGESTED_7_DAY_MONTHIZED, type = "C-svc", kernel = 'vanilladot')
+#plot(kernfit, data = nosplits_svmsmall$ROLLING_ACTIVE_USERS_30_DAY_DAILY)
+```
+
+
+
+
+# Gradient Boosting Machines (regression)
+
+## Load dataset
+```{r}
+nosplits_xgb_reg <- subset(nosplits_numeric, select = -c(CONSO_CRR, FULL_USER_CRR, CONSO_FIXED_CRR, TDP_CRR, CONSO_TDP_CRR, CONSO_FULL_USER_CRR, CONSO_CRR_BAND_ORDER_ID))
+
+```
+
+## Create Testing and Training Sets
+```{r}
+set.seed(7)
+
+in.train = sample(nrow(nosplits_xgb_reg), size = round(nrow(nosplits_xgb_reg) * .8))
+nosplits_xgbregtrain = nosplits_xgb_reg[in.train, ]
+nosplits_xgbregtest = nosplits_xgb_reg[-in.train, ]
+```
+
+```{r, include = FALSE}
+summary(nosplits_xgbregtrain)
+```
+
+## Run GBM Algorithm
+```{r}
+gbm.regfit <- gbm(
+  formula = CRR ~ .,
+  distribution = "gaussian",
+  data = nosplits_xgbregtrain,
+  n.trees = 10000,
+  interaction.depth = 1,
+  shrinkage = 0.001,
+  cv.folds = 5,
+  n.cores = NULL, # will use all cores by default
+  verbose = FALSE
+  )  
+```
+
+```{r}
+print(gbm.regfit)
+```
+
+## MSE and RMSE
+```{r}
+sqrt(min(gbm.regfit$cv.error))
+```
+
+
+## Loss Function
+```{r}
+gbm.perf(gbm.regfit, method = "cv")
+```
+
+
+```{r}
+# for reproducibility
+set.seed(123)
+
+# train GBM model
+gbm.regfit2 <- gbm(
+  formula = CRR ~ .,
+  distribution = "gaussian",
+  data = nosplits_xgbregtrain,
+  n.trees = 5000,
+  interaction.depth = 3,
+  shrinkage = 0.1,
+  cv.folds = 5,
+  n.cores = NULL, # will use all cores by default
+  verbose = FALSE
+  )  
+```
+
+
+```{r}
+print(gbm.regfit2)
+```
+
+
+
+```{r}
+# find index for n trees with minimum CV error
+min_MSE <- which.min(gbm.regfit2$cv.error)
+```
+
+```{r}
+# get MSE and compute RMSE
+sqrt(gbm.regfit2$cv.error[min_MSE])
+```
+
+```{r}
+# plot loss function as a result of n trees added to the ensemble
+gbm.perf(gbm.regfit2, method = "cv")
+```
+
+```{r}
+# create hyperparameter grid
+hyper_grid <- expand.grid(
+  shrinkage = c(.01, .1, .3),
+  interaction.depth = c(1, 3, 5),
+  n.minobsinnode = c(5, 10, 15),
+  bag.fraction = c(.65, .8, 1), 
+  optimal_trees = 0,               # a place to dump results
+  min_RMSE = 0                     # a place to dump results
+)
+
+# total number of combinations
+nrow(hyper_grid)
+```
+
+## Factor Analysis
+```{r}
+par(mar = c(5, 8, 1, 1))
+summary(
+  gbm.regfit, 
+  cBars = 10,
+  method = relative.influence, # also can use permutation.test.gbm
+  las = 2
+  )
+```
+
+
+```{r}
+vip::vip(gbm.regfit)
+```
+
+```{r}
+par(mar = c(5, 8, 1, 1))
+summary(
+  gbm.regfit2, 
+  cBars = 10,
+  method = relative.influence, # also can use permutation.test.gbm
+  las = 2
+  )
+```
+
+```{r}
+vip::vip(gbm.regfit2)
+```
+
+
+```{r}
+gbm.regfit %>%
+  partial(pred.var = "ACR_ADJUSTED", n.trees = gbm.regfit$n.trees, grid.resolution = 100) %>%
+  autoplot(rug = TRUE, train = nosplits_xgbregtrain) +
+  scale_y_continuous(labels = scales::dollar)
+```
+
+```{r}
+gbm.regfit %>%
+  partial(pred.var = "TOTAL_GB_INGESTED", n.trees = gbm.regfit$n.trees, grid.resolution = 100) %>%
+  autoplot(rug = TRUE, train = nosplits_xgbregtrain) +
+  scale_y_continuous(labels = scales::dollar)
+```
+
+```{r}
+gbm.regfit %>%
+  partial(pred.var = "APOF_ANNUAL_POOL", n.trees = gbm.regfit$n.trees, grid.resolution = 100) %>%
+  autoplot(rug = TRUE, train = nosplits_xgbregtrain) +
+  scale_y_continuous(labels = scales::dollar)
+```
+
+## PDP VS ICE (ACR)
+```{r}
+ice1 <- gbm.regfit %>%
+  partial(
+    pred.var = "ACR_ADJUSTED", 
+    n.trees = gbm.regfit$n.trees, 
+    grid.resolution = 100,
+    ice = TRUE
+    ) %>%
+  autoplot(rug = TRUE, train = nosplits_xgbregtrain, alpha = .1) +
+  ggtitle("Non-centered") +
+  scale_y_continuous(labels = scales::dollar)
+
+ice2 <- gbm.regfit %>%
+  partial(
+    pred.var = "ACR_ADJUSTED", 
+    n.trees = gbm.regfit$n.trees, 
+    grid.resolution = 100,
+    ice = TRUE
+    ) %>%
+  autoplot(rug = TRUE, train = nosplits_xgbregtrain, alpha = .1, center = TRUE) +
+  ggtitle("Centered") +
+  scale_y_continuous(labels = scales::dollar)
+
+gridExtra::grid.arrange(ice1, ice2, nrow = 1)
+```
+
+
+## PDP VS ICE (APOF)
+```{r}
+ice1 <- gbm.regfit %>%
+  partial(
+    pred.var = "APOF_ANNUAL_POOL", 
+    n.trees = gbm.regfit$n.trees, 
+    grid.resolution = 100,
+    ice = TRUE
+    ) %>%
+  autoplot(rug = TRUE, train = nosplits_xgbregtrain, alpha = .1) +
+  ggtitle("Non-centered") +
+  scale_y_continuous(labels = scales::dollar)
+
+ice2 <- gbm.regfit %>%
+  partial(
+    pred.var = "APOF_ANNUAL_POOL", 
+    n.trees = gbm.regfit$n.trees, 
+    grid.resolution = 100,
+    ice = TRUE
+    ) %>%
+  autoplot(rug = TRUE, train = nosplits_xgbregtrain, alpha = .1, center = TRUE) +
+  ggtitle("Centered") +
+  scale_y_continuous(labels = scales::dollar)
+
+gridExtra::grid.arrange(ice1, ice2, nrow = 1)
+```
+
+
+## PDP VS ICE(Ingest)
+```{r}
+ice1 <- gbm.regfit %>%
+  partial(
+    pred.var = "TOTAL_GB_INGESTED", 
+    n.trees = gbm.regfit$n.trees, 
+    grid.resolution = 100,
+    ice = TRUE
+    ) %>%
+  autoplot(rug = TRUE, train = nosplits_xgbregtrain, alpha = .1) +
+  ggtitle("Non-centered") +
+  scale_y_continuous(labels = scales::dollar)
+
+ice2 <- gbm.regfit %>%
+  partial(
+    pred.var = "TOTAL_GB_INGESTED", 
+    n.trees = gbm.regfit$n.trees, 
+    grid.resolution = 100,
+    ice = TRUE
+    ) %>%
+  autoplot(rug = TRUE, train = nosplits_xgbregtrain, alpha = .1, center = TRUE) +
+  ggtitle("Centered") +
+  scale_y_continuous(labels = scales::dollar)
+
+gridExtra::grid.arrange(ice1, ice2, nrow = 1)
+```
+
+
+
+## Prediction
+```{r}
+# predict values for test data
+pred <- predict(gbm.regfit, n.trees = gbm.regfit$n.trees, nosplits_xgbregtest)
+```
+
+```{r}
+# results
+caret::RMSE(pred, nosplits_xgbregtest$CRR)
+```
+
+
+
+
+
+# Gradient Boosting Machine (classification)
+
+## Load Dataset
+```{r}
+nosplits_xgbclass <- subset(nosplits_nonnum, select = -c(DTE, SFDC_ACCOUNT_ID_CURRENT, 
+                                    SFDC_ACCOUNT_NAME_CURRENT, 
+                                    SFDC_FAM_ID_CURRENT, 
+                                    SFDC_FAM_NAME_CURRENT,
+                                    ACCOUNT_OWNER_CURRENT,
+                                    SALES_GEO_CURRENT, 
+                                    ACCOUNT_OWNER_ID_CURRENT,
+                                    CONSO_RPM_ACCOUNT_ID_AGG,
+                                    CONSO_BURN_RATE_BUCKET))
+```
+
+
+
+```{r, include = FALSE}
+summary(nosplits_xgbclass)
+```
+
+
+## Data Preprocessing
+```{r}
+# Convert to factor
+nosplits_xgbclass[sapply(nosplits_xgbclass, is.character)] <- lapply(nosplits_xgbclass[sapply(nosplits_xgbclass, is.character)], 
+                                       as.factor)
+```
+
+
+## Create Testing and Training Sets
+```{r}
+set.seed(8)
+
+in.train = sample(nrow(nosplits_xgbclass), size = round(nrow(nosplits_xgbclass) * .8))
+nosplits_xgbclasstrain = nosplits_xgbclass[in.train, ]
+nosplits_xgbclasstest = nosplits_xgbclass[-in.train, ]
+```
+
+
+```{r, include = FALSE}
+summary(nosplits_xgbclasstrain)
+```
+
+## Run GBM Algorithm
+```{r}
+gbm.classfit <- gbm(
+  formula = BURN_RATE_BUCKET ~ .,
+  distribution = "gaussian",
+  data = nosplits_xgbclasstrain,
+  n.trees = 10000,
+  interaction.depth = 1,
+  shrinkage = 0.001,
+  cv.folds = 5,
+  n.cores = NULL, # will use all cores by default
+  verbose = FALSE
+  )  
+```
+
+```{r}
+print(gbm.classfit)
+```
+
+## MSE and RMSE
+```{r}
+sqrt(min(gbm.classfit$cv.error))
+```
+
+
+## Loss Function
+```{r}
+gbm.perf(gbm.classfit, method = "cv")
+```
+
+```{r}
+par(mar = c(5, 8, 1, 1))
+summary(
+  gbm.classfit, 
+  cBars = 10,
+  method = relative.influence, # also can use permutation.test.gbm
+  las = 2
+  )
+```
+
+
+
+
+```{r}
+# for reproducibility
+set.seed(123)
+
+# train GBM model
+gbm.classfit2 <- gbm(
+  formula = BURN_RATE_BUCKET ~ .,
+  distribution = "gaussian",
+  data = nosplits_xgbclasstrain,
+  n.trees = 5000,
+  interaction.depth = 3,
+  shrinkage = 0.1,
+  cv.folds = 5,
+  n.cores = NULL, # will use all cores by default
+  verbose = FALSE
+  )  
+```
+
+```{r}
+print(gbm.classfit2)
+```
+
+
+
+```{r}
+# find index for n trees with minimum CV error
+min_MSE <- which.min(gbm.classfit2$cv.error)
+```
+
+```{r}
+# get MSE and compute RMSE
+sqrt(gbm.classfit2$cv.error[min_MSE])
+```
+
+```{r}
+# plot loss function as a result of n trees added to the ensemble
+gbm.perf(gbm.classfit2, method = "cv")
+```
+
+```{r}
+# create hyperparameter grid
+hyper_grid <- expand.grid(
+  shrinkage = c(.01, .1, .3),
+  interaction.depth = c(1, 3, 5),
+  n.minobsinnode = c(5, 10, 15),
+  bag.fraction = c(.65, .8, 1), 
+  optimal_trees = 0,               # a place to dump results
+  min_RMSE = 0                     # a place to dump results
+)
+
+# total number of combinations
+nrow(hyper_grid)
+```
+
+## Factor Analysis
+```{r}
+par(mar = c(5, 8, 1, 1))
+summary(
+  gbm.classfit2, 
+  cBars = 10,
+  method = relative.influence, # also can use permutation.test.gbm
+  las = 2
+  )
+```
+
+
+```{r}
+vip::vip(gbm.classfit2)
+```
+
+
+```{r}
+ice1 <- gbm.classfit2 %>%
+  partial(
+    pred.var = "CONSO_RENEWAL_DATE_AGG", 
+    n.trees = gbm.classfit2$n.trees, 
+    grid.resolution = 100,
+    ice = TRUE
+    ) %>%
+  autoplot(rug = TRUE, train = nosplits_xgbclasstrain, alpha = .1) +
+  ggtitle("Non-centered") +
+  scale_y_continuous(labels = scales::dollar)
+
+ice2 <- gbm.classfit2 %>%
+  partial(
+    pred.var = "CONSO_RENEWAL_DATE_AGG", 
+    n.trees = gbm.classfit2$n.trees, 
+    grid.resolution = 100,
+    ice = TRUE
+    ) %>%
+  autoplot(rug = TRUE, train = nosplits_xgbclasstrain, alpha = .1, center = TRUE) +
+  ggtitle("Centered") +
+  scale_y_continuous(labels = scales::dollar)
+
+gridExtra::grid.arrange(ice1, ice2, nrow = 1)
+```
+
+
+## Prediction
+```{r}
+# predict values for test data
+pred <- predict(gbm.classfit2, n.trees = gbm.classfit2$n.trees, nosplits_xgbclasstest)
+```
+
+```{r}
+# results
+caret::RMSE(pred, nosplits_xgbclasstest$CRR)
+```
+
+
+
+
+
+# XGBoost
+## Load dataset
+```{r}
+nosplits_xgb <- subset(nosplits_nc, select = -c(CONSO_CRR, FULL_USER_CRR, CONSO_FIXED_CRR, TDP_CRR, CONSO_TDP_CRR, CONSO_FULL_USER_CRR, CONSO_CRR_BAND_ORDER_ID))
+```
+
+## Training and testing
+```{r}
+set.seed(12)
+
+in.train = sample(nrow(nosplits_xgb), size = round(nrow(nosplits_xgb) * .8))
+
+nosplits_xgbtrain = nosplits_xgb[in.train, ]
+nosplits_xgbtest = nosplits_xgb[-in.train, ]
+```
+
+
+## Data Preprocessing
+```{r}
+# variable names
+features <- setdiff(names(nosplits_xgbtrain), "CRR")
+
+# Create the treatment plan from the training data
+treatplan <- vtreat::designTreatmentsZ(nosplits_xgbtrain, features, verbose = FALSE)
+
+# Get the "clean" variable names from the scoreFrame
+new_vars <- treatplan %>%
+  magrittr::use_series(scoreFrame) %>%        
+  dplyr::filter(code %in% c("clean", "lev")) %>% 
+  magrittr::use_series(varName)     
+
+```
+
+
+## Prepare training and testing
+```{r}
+
+# Prepare the training data
+features_train <- vtreat::prepare(treatplan, nosplits_xgbtrain, varRestriction = new_vars) %>% as.matrix()
+response_train <- nosplits_xgbtrain$CRR
+
+# Prepare the test data
+features_test <- vtreat::prepare(treatplan, nosplits_xgbtest, varRestriction = new_vars) %>% as.matrix()
+response_test <- nosplits_xgbtest$CRR
+
+# dimensions of one-hot encoded data
+dim(features_train)
+## [1] 2051  208
+dim(features_test)
+## [1] 879 208
+```
+
+
+
+```{r}
+# reproducibility
+set.seed(123)
+
+xgb.fit1 <- xgb.cv(
+  data = features_train,
+  label = response_train,
+  nrounds = 1000,
+  nfold = 5,
+  objective = "reg:linear",  # for regression models
+  verbose = 0               # silent,
+)
+```
+
+
+```{r}
+# get number of trees that minimize error
+xgb.fit1$evaluation_log %>%
+  dplyr::summarise(
+    ntrees.train = which(train_rmse_mean == min(train_rmse_mean))[1],
+    rmse.train   = min(train_rmse_mean),
+    ntrees.test  = which(test_rmse_mean == min(test_rmse_mean))[1],
+    rmse.test   = min(test_rmse_mean),
+  )
+##   ntrees.train rmse.train ntrees.test rmse.test
+## 1          965  0.5022836          60  27572.31
+
+# plot error vs number trees
+ggplot(xgb.fit1$evaluation_log) +
+  geom_line(aes(iter, train_rmse_mean), color = "red") +
+  geom_line(aes(iter, test_rmse_mean), color = "blue")
+```
+## Set Parameters
+```{r}
+params <- list(
+  eta = 0.01,
+  max_depth = 5,
+  min_child_weight = 5,
+  subsample = 0.65,
+  colsample_bytree = 1
+)
+```
+
+
+## Run Final Model
+```{r}
+xgb.fit.final <- xgboost(
+  params = params,
+  data = features_train,
+  label = response_train,
+  nrounds = 1576,
+  objective = "reg:linear",
+  verbose = 0
+)
+```
+
+
+```{r}
+# create importance matrix
+importance_matrix <- xgb.importance(model = xgb.fit.final)
+
+# variable importance plot
+xgb.plot.importance(importance_matrix, top_n = 10, measure = "Gain")
+```
+
+## Partial Dependence vs. Individual Conditional Expectation (ACR)
+```{r}
+pdp <- xgb.fit.final %>%
+  partial(pred.var = "ACR_ADJUSTED", n.trees = 1576, grid.resolution = 100, train = features_train) %>%
+  autoplot(rug = TRUE, train = features_train) +
+  scale_y_continuous(labels = scales::dollar) +
+  ggtitle("PDP")
+
+ice <- xgb.fit.final %>%
+  partial(pred.var = "ACR_ADJUSTED", n.trees = 1576, grid.resolution = 100, train = features_train, ice = TRUE) %>%
+  autoplot(rug = TRUE, train = features_train, alpha = .1, center = TRUE) +
+  scale_y_continuous(labels = scales::dollar) +
+  ggtitle("ICE")
+
+gridExtra::grid.arrange(pdp, ice, nrow = 1)
+```
+
+## Partial Dependence vs. Individual Conditional Expectation (APOF)
+```{r}
+pdp <- xgb.fit.final %>%
+  partial(pred.var = "APOF_ANNUAL_POOL", n.trees = 1576, grid.resolution = 100, train = features_train) %>%
+  autoplot(rug = TRUE, train = features_train) +
+  scale_y_continuous(labels = scales::dollar) +
+  ggtitle("PDP")
+
+ice <- xgb.fit.final %>%
+  partial(pred.var = "APOF_ANNUAL_POOL", n.trees = 1576, grid.resolution = 100, train = features_train, ice = TRUE) %>%
+  autoplot(rug = TRUE, train = features_train, alpha = .1, center = TRUE) +
+  scale_y_continuous(labels = scales::dollar) +
+  ggtitle("ICE")
+
+gridExtra::grid.arrange(pdp, ice, nrow = 1)
+
+
+```
+
+##Partial Dependence vs. Individual Conditional Expectation (Ingest)
+```{r}
+pdp <- xgb.fit.final %>%
+  partial(pred.var = "TOTAL_GB_INGESTED", n.trees = 1576, grid.resolution = 100, train = features_train) %>%
+  autoplot(rug = TRUE, train = features_train) +
+  scale_y_continuous(labels = scales::dollar) +
+  ggtitle("PDP")
+
+ice <- xgb.fit.final %>%
+  partial(pred.var = "TOTAL_GB_INGESTED", n.trees = 1576, grid.resolution = 100, train = features_train, ice = TRUE) %>%
+  autoplot(rug = TRUE, train = features_train, alpha = .1, center = TRUE) +
+  scale_y_continuous(labels = scales::dollar) +
+  ggtitle("ICE")
+
+gridExtra::grid.arrange(pdp, ice, nrow = 1)
+
+```
+
+
+```{r}
+# predict values for test data
+pred <- predict(xgb.fit.final, features_test)
+
+# results
+caret::RMSE(pred, response_test)
+## [1] 21319.3
+```
+
+
+
+
+# Long Short-Term Memory
+## Load data
+```{r}
+nosplits_lstm <- nosplits_nc
+```
+
+```{r, echo=FALSE, include = FALSE}
+summary(nosplits_lstm)
+```
+
+
+## Create training and testing set
+```{r}
+set.seed(25)
+
+in.train = sample(nrow(nosplits_lstm), size = round(nrow(nosplits_lstm) * .8))
+
+nosplits_lstmtrain = nosplits_lstm[in.train, ]
+nosplits_lstmtest = nosplits_lstm[-in.train, ]
+```
+
+## Initiate model
+```{r}
+lstm_model <- keras_model_sequential()
+lstm_model %>%
+  layer_embedding(input_dim = 500, output_dim = 32) %>%
+  layer_simple_rnn(units = 32) %>% 
+  layer_dense(units = 1, activation = "sigmoid")
+``` 
+
+```{r}
+scale_factors <- c(mean(nosplits_lstm$CRR), sd(nosplits_lstm$CRR))
+```
+
+```{r}
+scaled_train <- nosplits_lstm %>%
+    dplyr::select(CRR) %>%
+    dplyr::mutate(CRR = (CRR - scale_factors[1]) / scale_factors[2])
+```
+
+```{r}
+prediction <- 12
+lag <- prediction
+```
+
+```{r}
+scaled_train <- as.matrix(scaled_train)
+ 
+# we lag the data 11 times and arrange that into columns
+x_train_data <- t(sapply(
+    1:(length(scaled_train) - lag - prediction + 1),
+    function(x) scaled_train[x:(x + lag - 1), 1]
+  ))
+ 
+# now we transform it into 3D form
+x_train_arr <- array(
+    data = as.numeric(unlist(x_train_data)),
+    dim = c(
+      nrow(x_train_data),
+        lag,
+        1
+    )
+)
+```
+
+
+```{r}
+y_train_data <- t(sapply(
+    (1 + lag):(length(scaled_train) - prediction + 1),
+    function(x) scaled_train[x:(x + prediction - 1)]
+))
+ 
+y_train_arr <- array(
+    data = as.numeric(unlist(y_train_data)),
+    dim = c(
+        nrow(y_train_data),
+        prediction,
+        1
+    )
+)
+```
+
+```{r}
+x_test <- nosplits_lstm$CRR[(nrow(scaled_train) - prediction + 1):nrow(scaled_train)]
+```
+
+```{r}
+# scale the data with same scaling factors as for training
+x_test_scaled <- (x_test - scale_factors[1]) / scale_factors[2]
+ 
+# this time our array just has one sample, as we intend to perform one 12-months prediction
+x_pred_arr <- array(
+    data = x_test_scaled,
+   dim = c(
+        1,
+        lag,
+        1
+    )
+)
+```
+
+
+```{r}
+lstm_model <- keras_model_sequential()
+ 
+lstm_model %>%
+  layer_lstm(units = 50, # size of the layer
+       batch_input_shape = c(1, 12, 1), # batch size, timesteps, features
+       return_sequences = TRUE,
+       stateful = TRUE) %>%
+  # fraction of the units to drop for the linear transformation of the inputs
+  layer_dropout(rate = 0.5) %>%
+  layer_lstm(units = 50,
+        return_sequences = TRUE,
+        stateful = TRUE) %>%
+  layer_dropout(rate = 0.5) %>%
+  time_distributed(keras::layer_dense(units = 1))
+```
+
+```{r}
+lstm_model %>%
+    compile(loss = 'mae', optimizer = 'adam', metrics = 'accuracy')
+ 
+summary(lstm_model)
+```
+
+
+```{r}
+lstm_model %>% fit(
+    x = x_train_arr,
+    y = y_train_arr,
+    batch_size = 1,
+    epochs = 20,
+    verbose = 0,
+    shuffle = FALSE
+)
+```
+
+```{r}
+lstm_forecast <- lstm_model %>%
+    predict(x_pred_arr, batch_size = 1) %>%
+    .[, , 1]
+ 
+# we need to rescale the data to restore the original values
+lstm_forecast <- lstm_forecast * scale_factors[2] + scale_factors[1]
+```
+
+
+
+
+
+
+```{r}
+lstm_trainx <- nosplits_lstmtrain$APOF_ANNUAL_POOL
+lstm_trainy <- nosplits_lstmtrain$CRR
+```
+
+
+
+```{r}
+lstm_testx <- nosplits_lstmtest$APOF_ANNUAL_POOL
+lstm_testy <- nosplits_lstmtest$CRR
+```
+
+
+
+```{r, echo=FALSE, include = FALSE}
+summary(nosplits_lstm)
+```
+
+
+```{r}
+lstm_trainx <- pad_sequences(list(lstm_trainx), maxlen = 90)
+lstm_testx <- pad_sequences(list(lstm_testx), maxlen = 90)
+```
+
+```{r}
+lstm_trainy <- pad_sequences(list(lstm_trainy), maxlen = 90)
+lstm_testy <- pad_sequences(list(lstm_testy), maxlen = 90)
+```
+
+## Reshape data
+
+```{r}
+#lstm_model %>% compile(optimizer = "rmsprop",
+#                  loss = "binary_crossentropy",
+#                  metrics = c("acc"))
+```
+
+
+
+```{r}
+#lstm_model = tf.keras.layers.Input(shape=lstm_trainx[0].shape),
+```
+
+
+
+```{r}
+#history <- lstm_model %>% fit(lstm_trainx, lstm_trainy,
+#                         epochs = 25,
+#                         batch_size = 20000)
+```
+
+```{r}
+reticulate::py_last_error()
+```
+
+
+## Visualize model
+```{r}
+#plot(history)
+```
+
+
+# New
+
+```{r}
+summary(new)
+```
+
+
+
+
+# Model Comparison
+
+
+\newpage
+
+## References
+* CRR Background (https://docs.google.com/document/d/1cfbNEw5vTA-KrJsI9pqusZuTahPi21IGscbzdUFVPAs/edit#:~:text=8-,Run%20Rate%20Definition,-investopedia.com)
+* Demand Prediction with Neural Networks (https://docs.google.com/document/d/1cfbNEw5vTA-KrJsI9pqusZuTahPi21IGscbzdUFVPAs/edit#:~:text=Predicting%20energy%20demand%20with%20neural%20networks%20%7C%20Towards%20Data%20Science)
+* Consumption Prediction with Machine Learning (https://scholar.smu.edu/cgi/viewcontent.cgi?article=1055&context=datasciencereview)
+* New Relic Query Language Background (https://docs.newrelic.com/docs/query-your-data/nrql-new-relic-query-language/get-started/introduction-nrql-new-relics-query-language/)
+* NRQL Examples (https://docs.google.com/document/d/1xRpo5wKVtolXpejzXOqauBd6DDPyEjO_uStFycp6FSM/edit)
+* CRR Update (https://docs.google.com/document/d/1cfbNEw5vTA-KrJsI9pqusZuTahPi21IGscbzdUFVPAs/edit#:~:text=Copy%20of%20CRR%20update%20%2D%20March%202022)
+* CRR Forecasting - Mgr Meeting (https://docs.google.com/presentation/d/1ezW19Gl4ehJ-2yJpbZuwQ8sMwSzMeaoXg_RoqIrocEE/edit#slide=id.g11b51c39525_2_116)
+* FY23 CRR Forecast Tracker AMER_2022-05 (https://docs.google.com/spreadsheets/d/1XvEbG8m8N64sRtigcDAZFw4vy5Sej1jRp1bsFZDvT6I/edit?resourcekey#gid=1681903042)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
